@@ -1,1 +1,0 @@
-{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"k3s_cluster","Source":"../../../modules/k3s-cluster","Dir":"../../../modules/k3s-cluster"},{"Key":"k3s_cluster.masters","Source":"../vm","Dir":"../../../modules/vm"},{"Key":"k3s_cluster.workers","Source":"../vm","Dir":"../../../modules/vm"}]}
