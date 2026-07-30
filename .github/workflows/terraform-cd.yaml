@@ -5,7 +5,14 @@ on:
     branches:
       - main
       - master
+    paths:
+      - 'envs/shared/**'
   workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment name under envs/shared
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -21,12 +28,60 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - id: set-matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+          REQUESTED_ENVIRONMENT: ${{ inputs.environment }}
         run: |
-          python3 -c 'import os, json; dirs = [f"envs/shared/{d}" for d in os.listdir("envs/shared") if os.path.isdir(f"envs/shared/{d}") and os.path.isfile(f"envs/shared/{d}/main.tf")]; print("matrix=" + json.dumps(dirs))' >> $GITHUB_OUTPUT
+          python3 <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          root = pathlib.Path("envs/shared")
+          if os.environ["EVENT_NAME"] == "workflow_dispatch":
+              names = {os.environ["REQUESTED_ENVIRONMENT"]}
+          else:
+              before = os.environ["BEFORE_SHA"]
+              current = os.environ["CURRENT_SHA"]
+              if set(before) == {"0"}:
+                  command = ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", current]
+              else:
+                  command = ["git", "diff", "--name-only", before, current]
+              changed = subprocess.check_output(command, text=True).splitlines()
+              names = {
+                  pathlib.PurePosixPath(path).parts[2]
+                  for path in changed
+                  if pathlib.PurePosixPath(path).parts[:2] == ("envs", "shared")
+                  and len(pathlib.PurePosixPath(path).parts) >= 3
+              }
+
+          environments = []
+          for name in sorted(names):
+              directory = root / name
+              if "/" in name or name in {"", ".", ".."}:
+                  raise SystemExit(f"Invalid environment name: {name!r}")
+              if not (directory / "main.tf").is_file():
+                  continue
+              if (directory / "backend.tf").is_file():
+                  print(
+                      f"Skipping {directory}: remote-state environments are owned by Argo Workflows",
+                      file=os.sys.stderr,
+                  )
+                  continue
+              environments.append(str(directory))
+
+          print("matrix=" + json.dumps(environments))
+          PY
 
   deploy:
     needs: discover
+    if: needs.discover.outputs.matrix != '[]'
     runs-on: self-hosted
     strategy:
       max-parallel: 1
@@ -55,4 +110,3 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add *.tfstate
           git diff --quiet && git diff --staged --quiet || (git commit -m "update state for ${GITHUB_SHA::7} [skip ci]" && git pull --rebase && git push)
-
